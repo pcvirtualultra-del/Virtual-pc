@@ -1,0 +1,411 @@
+name: PC criado pelo @alves7.pcm [v4 ULTRA]
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_number:
+        description: 'Número da Instância (1-10)'
+        required: true
+        default: '1'
+        type: string
+      auto_shutdown_minutes:
+        description: 'Auto-desligar após X minutos (0 = desativado)'
+        required: true
+        default: '0'
+        type: string
+      install_extras:
+        description: 'Instalar apps extras?'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      git_method:
+        description: 'Método do Git (ultra = mais rápido)'
+        required: true
+        default: 'ultra'
+        type: choice
+        options:
+          - 'ultra'      # ⚡ Mais rápido (~10-20s)
+          - 'winget'     # 🥇 Rápido (~30-60s)
+          - 'portable'   # 🥈 Médio (~25-45s)
+          - 'skip'       # ⏭️ Pular
+
+jobs:
+  deploy-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      timeout-minutes: 2
+
+    # ==========================================================
+    #  CACHE DO GIT (evita baixar novamente em runs futuros)
+    # ==========================================================
+    - name: Cache Git Installer
+      if: ${{ github.event.inputs.git_method == 'ultra' }}
+      uses: actions/cache@v4
+      id: git-cache
+      with:
+        path: ${{ runner.temp }}\git-cache
+        key: git-installer-v2.47.0-win64
+
+    # ==========================================================
+    #  BANNER
+    # ==========================================================
+    - name: Banner - PC criado pelo @alves7.pcm
+      timeout-minutes: 1
+      run: |
+        Write-Host ""
+        Write-Host "  █████╗ ██╗    ██╗   ██╗███████╗███████╗███████╗" -ForegroundColor Magenta
+        Write-Host " ██╔══██╗██║    ██║   ██║██╔════╝██╔════╝██╔════╝" -ForegroundColor Magenta
+        Write-Host " ███████║██║    ██║   ██║█████╗  ███████╗███████╗" -ForegroundColor Magenta
+        Write-Host " ██╔══██║██║    ╚██╗ ██╔╝██╔══╝  ╚════██║╚════██║" -ForegroundColor Magenta
+        Write-Host " ██║  ██║███████╗╚████╔╝ ███████╗███████║███████║" -ForegroundColor Magenta
+        Write-Host " ╚═╝  ╚═╝╚══════╝ ╚═══╝  ╚══════╝╚══════╝╚══════╝" -ForegroundColor Magenta
+        Write-Host ""
+        Write-Host "      ⚡  PC CRIADO PELO @alves7.pcm [v4 ULTRA]  ⚡" -ForegroundColor Cyan
+        Write-Host "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+        Write-Host ""
+
+    - name: System Information
+      timeout-minutes: 2
+      run: |
+        Write-Host "=== INFORMAÇÕES ===" -ForegroundColor Cyan
+        Write-Host "Instância: ${{ github.event.inputs.instance_number }}" -ForegroundColor Yellow
+        Write-Host "Runner: $env:RUNNER_NAME" -ForegroundColor Yellow
+        Write-Host "Iniciado por: ${{ github.actor }}" -ForegroundColor Yellow
+        Get-ComputerInfo | Select-Object WindowsProductName, TotalPhysicalMemory
+        Get-WmiObject Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+
+    # ==========================================================
+    #  CONFIGURAÇÕES RÁPIDAS (RDP + USER)
+    # ==========================================================
+    - name: Setup RDP and User (Fast)
+      timeout-minutes: 2
+      run: |
+        Write-Host "🔓 Habilitando RDP..." -ForegroundColor Green
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        
+        Write-Host "👤 Criando conta..." -ForegroundColor Green
+        $Password = ConvertTo-SecureString "Alves7@PC!" -AsPlainText -Force
+        Set-LocalUser -Name "runneradmin" -Password $Password
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
+        Add-LocalGroupMember -Group "Administrators" -Member "runneradmin" -ErrorAction SilentlyContinue
+        Write-Host "✅ RDP + Usuário prontos!" -ForegroundColor Green
+
+    # ==========================================================
+    #  DOWNLOADS PARALELOS (economia de ~60% do tempo)
+    # ==========================================================
+    - name: Parallel Downloads (All Apps At Once)
+      timeout-minutes: 5
+      continue-on-error: true
+      run: |
+        Write-Host "⚡ Iniciando downloads PARALELOS..." -ForegroundColor Cyan
+        Write-Host ""
+        
+        $downloadDir = "$env:TEMP\apps"
+        New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+        
+        # Lista de downloads
+        $downloads = @(
+          @{ Name = "Tailscale"; Url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"; File = "tailscale.msi" },
+          @{ Name = "Chrome";    Url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"; File = "chrome.exe" },
+          @{ Name = "7-Zip";     Url = "https://www.7-zip.org/a/7z2409-x64.exe"; File = "7zip.exe" }
+        )
+        
+        if ("${{ github.event.inputs.install_extras }}" -eq "true") {
+          $downloads += @{ Name = "VSCode"; Url = "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user"; File = "vscode.exe" }
+          $downloads += @{ Name = "Python"; Url = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe"; File = "python.exe" }
+          $downloads += @{ Name = "Node";   Url = "https://nodejs.org/dist/v20.18.0/node-v20.18.0-x64.msi"; File = "node.msi" }
+        }
+        
+        # Iniciar todos em paralelo com Jobs
+        $jobs = @()
+        foreach ($d in $downloads) {
+          $jobs += Start-Job -ScriptBlock {
+            param($url, $path, $name)
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            curl.exe -L --max-time 180 --retry 2 --retry-delay 3 --silent -o $path $url 2>&1 | Out-Null
+            $sw.Stop()
+            $size = if (Test-Path $path) { [math]::Round((Get-Item $path).Length / 1MB, 2) } else { 0 }
+            return [PSCustomObject]@{ Name = $name; SizeMB = $size; TimeSec = [math]::Round($sw.Elapsed.TotalSeconds, 1) }
+          } -ArgumentList $d.Url, "$downloadDir\$($d.File)", $d.Name
+        }
+        
+        Write-Host "⏳ Aguardando $($jobs.Count) downloads..." -ForegroundColor Yellow
+        
+        # Aguardar todos
+        $jobs | Wait-Job | Out-Null
+        $results = $jobs | Receive-Job
+        $jobs | Remove-Job -Force
+        
+        Write-Host ""
+        Write-Host "📊 RESULTADOS DOS DOWNLOADS:" -ForegroundColor Cyan
+        foreach ($r in $results) {
+          if ($r.SizeMB -gt 1) {
+            Write-Host ("   ✅ {0,-12} {1,7} MB em {2,6}s" -f $r.Name, $r.SizeMB, $r.TimeSec) -ForegroundColor Green
+          } else {
+            Write-Host ("   ❌ {0,-12} FALHOU" -f $r.Name) -ForegroundColor Red
+          }
+        }
+
+    # ==========================================================
+    #  TAILSCALE
+    # ==========================================================
+    - name: Install Tailscale
+      timeout-minutes: 2
+      run: |
+        Write-Host "⚙️ Instalando Tailscale..." -ForegroundColor Green
+        Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\apps\tailscale.msi`" /quiet /norestart" -Wait
+        Write-Host "✅ Tailscale instalado!" -ForegroundColor Green
+
+    - name: Start Tailscale
+      timeout-minutes: 2
+      run: |
+        Write-Host "🌐 Iniciando Tailscale..." -ForegroundColor Green
+        $hostname = "alves7-pc-${{ github.event.inputs.instance_number }}-${{ github.run_id }}"
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname $hostname --accept-routes
+        Start-Sleep -Seconds 10
+        $tsIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+        Write-Host "✅ IP Tailscale: $tsIP" -ForegroundColor Green
+        echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+    # ==========================================================
+    #  INSTALAÇÕES PARALELAS (apps essenciais)
+    # ==========================================================
+    - name: Parallel Install (Essentials)
+      timeout-minutes: 5
+      continue-on-error: true
+      run: |
+        Write-Host "⚡ Instalando apps ESSENCIAIS em paralelo..." -ForegroundColor Cyan
+        
+        $jobs = @()
+        
+        # Chrome
+        $jobs += Start-Job -ScriptBlock {
+          Start-Process -FilePath "$env:TEMP\apps\chrome.exe" -ArgumentList "/silent /install" -Wait
+          return "Chrome instalado"
+        }
+        
+        # 7-Zip
+        $jobs += Start-Job -ScriptBlock {
+          Start-Process -FilePath "$env:TEMP\apps\7zip.exe" -ArgumentList "/S" -Wait
+          return "7-Zip instalado"
+        }
+        
+        $jobs | Wait-Job | Out-Null
+        $results = $jobs | Receive-Job
+        $jobs | Remove-Job -Force
+        
+        foreach ($r in $results) {
+          Write-Host "   ✅ $r" -ForegroundColor Green
+        }
+        Write-Host "✅ Apps essenciais instalados!" -ForegroundColor Green
+
+    # ==========================================================
+    #  GIT ULTRA RÁPIDO (cache + winget + portable fallback)
+    # ==========================================================
+    - name: Install Git (ULTRA FAST)
+      if: ${{ github.event.inputs.git_method == 'ultra' }}
+      timeout-minutes: 2
+      continue-on-error: true
+      run: |
+        Write-Host "⚡ GIT ULTRA - Método mais rápido possível" -ForegroundColor Cyan
+        Write-Host ""
+        
+        $cacheDir = "${{ runner.temp }}\git-cache"
+        $gitInstaller = "$cacheDir\PortableGit.7z.exe"
+        $cacheHit = "${{ steps.git-cache.outputs.cache-hit }}"
+        
+        # PASSO 1: Tentar usar cache (instantâneo)
+        if ($cacheHit -eq "true" -and (Test-Path $gitInstaller)) {
+          Write-Host "💾 CACHE HIT! Usando Git do cache (0s de download)" -ForegroundColor Green
+        } else {
+          Write-Host "📥 Cache miss, baixando Git Portable (~45MB)..." -ForegroundColor Yellow
+          New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+          
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          curl.exe -L --max-time 90 --retry 2 --retry-delay 2 --silent `
+            -o $gitInstaller `
+            "https://github.com/git-for-windows/git/releases/download/v2.47.0.windows.1/PortableGit-2.47.0-64-bit.7z.exe"
+          $sw.Stop()
+          
+          $size = [math]::Round((Get-Item $gitInstaller).Length / 1MB, 2)
+          Write-Host "   ✅ Baixado: $size MB em $([math]::Round($sw.Elapsed.TotalSeconds,1))s" -ForegroundColor Green
+        }
+        
+        # PASSO 2: Extrair Portable Git (super rápido, ~5s)
+        Write-Host "⚙️ Extraindo Git Portable para C:\Git..." -ForegroundColor Green
+        $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
+        
+        if (Test-Path "C:\Git") { Remove-Item "C:\Git" -Recurse -Force -ErrorAction SilentlyContinue }
+        
+        Start-Process -FilePath $gitInstaller -ArgumentList "-o`"C:\Git`" -y" -Wait -WindowStyle Hidden
+        $sw2.Stop()
+        Write-Host "   ✅ Extraído em $([math]::Round($sw2.Elapsed.TotalSeconds,1))s" -ForegroundColor Green
+        
+        # PASSO 3: Adicionar ao PATH imediatamente
+        $env:Path += ";C:\Git\cmd"
+        [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "Machine") + ";C:\Git\cmd", "Machine")
+        
+        # PASSO 4: Configurações iniciais do Git (evita prompts)
+        & "C:\Git\cmd\git.exe" config --global user.name "alves7" 2>&1 | Out-Null
+        & "C:\Git\cmd\git.exe" config --global user.email "alves7@pc.local" 2>&1 | Out-Null
+        & "C:\Git\cmd\git.exe" config --global init.defaultBranch main 2>&1 | Out-Null
+        & "C:\Git\cmd\git.exe" config --global core.autocrlf true 2>&1 | Out-Null
+        
+        Write-Host ""
+        Write-Host "✅ GIT INSTALADO E PRONTO!" -ForegroundColor Green
+        & "C:\Git\cmd\git.exe" --version
+
+    - name: Install Git (winget)
+      if: ${{ github.event.inputs.git_method == 'winget' }}
+      timeout-minutes: 2
+      continue-on-error: true
+      run: |
+        Write-Host "🔧 Instalando Git via winget..." -ForegroundColor Green
+        winget install --id Git.Git -e --source winget --silent `
+          --accept-package-agreements --accept-source-agreements `
+          --disable-interactivity
+        
+        $gitPath = "C:\Program Files\Git\cmd\git.exe"
+        if (Test-Path $gitPath) {
+          & $gitPath --version
+          Write-Host "✅ Git instalado via winget!" -ForegroundColor Green
+        } else {
+          Write-Host "⚠️ Git não encontrado, tentando fallback portable..." -ForegroundColor Yellow
+          # Fallback: portable
+          curl.exe -L --max-time 60 --silent -o "$env:TEMP\gitp.exe" "https://github.com/git-for-windows/git/releases/download/v2.47.0.windows.1/PortableGit-2.47.0-64-bit.7z.exe"
+          Start-Process "$env:TEMP\gitp.exe" -ArgumentList "-o`"C:\Git`" -y" -Wait -WindowStyle Hidden
+          $env:Path += ";C:\Git\cmd"
+          & "C:\Git\cmd\git.exe" --version
+        }
+
+    - name: Install Git (portable)
+      if: ${{ github.event.inputs.git_method == 'portable' }}
+      timeout-minutes: 2
+      continue-on-error: true
+      run: |
+        Write-Host "🔧 Git Portable..." -ForegroundColor Green
+        curl.exe -L --max-time 90 --retry 2 --silent -o "$env:TEMP\gitp.exe" "https://github.com/git-for-windows/git/releases/download/v2.47.0.windows.1/PortableGit-2.47.0-64-bit.7z.exe"
+        Start-Process "$env:TEMP\gitp.exe" -ArgumentList "-o`"C:\Git`" -y" -Wait -WindowStyle Hidden
+        $env:Path += ";C:\Git\cmd"
+        [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "Machine") + ";C:\Git\cmd", "Machine")
+        & "C:\Git\cmd\git.exe" --version
+        Write-Host "✅ Git Portable instalado!" -ForegroundColor Green
+
+    # ==========================================================
+    #  EXTRAS EM PARALELO
+    # ==========================================================
+    - name: Parallel Install (Extras)
+      if: ${{ github.event.inputs.install_extras == 'true' }}
+      timeout-minutes: 8
+      continue-on-error: true
+      run: |
+        Write-Host "⚡ Instalando apps EXTRAS em paralelo..." -ForegroundColor Cyan
+        
+        $jobs = @()
+        
+        # VS Code
+        $jobs += Start-Job -ScriptBlock {
+          Start-Process -FilePath "$env:TEMP\apps\vscode.exe" -ArgumentList "/VERYSILENT /MERGETASKS=!runcode,addcontextmenufiles,addcontextmenufolders,associatewithfiles,addtopath" -Wait
+          return "VS Code instalado"
+        }
+        
+        # Python
+        $jobs += Start-Job -ScriptBlock {
+          Start-Process -FilePath "$env:TEMP\apps\python.exe" -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait
+          return "Python instalado"
+        }
+        
+        # Node.js
+        $jobs += Start-Job -ScriptBlock {
+          Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\apps\node.msi`" /quiet /norestart" -Wait
+          return "Node.js instalado"
+        }
+        
+        Write-Host "⏳ Aguardando $($jobs.Count) instalações em paralelo..." -ForegroundColor Yellow
+        $jobs | Wait-Job | Out-Null
+        $results = $jobs | Receive-Job
+        $jobs | Remove-Job -Force
+        
+        foreach ($r in $results) {
+          Write-Host "   ✅ $r" -ForegroundColor Green
+        }
+        Write-Host "✅ Extras instalados!" -ForegroundColor Green
+
+    # ==========================================================
+    #  VERIFICAÇÃO FINAL
+    # ==========================================================
+    - name: Verify All Installations
+      timeout-minutes: 2
+      continue-on-error: true
+      run: |
+        Write-Host "`n=== VERIFICAÇÃO FINAL ===" -ForegroundColor Cyan
+        Write-Host ""
+        
+        $checks = @(
+          @{ Name = "Git";     Cmd = { & "C:\Git\cmd\git.exe" --version 2>&1 } },
+          @{ Name = "Python";  Cmd = { python --version 2>&1 } },
+          @{ Name = "Node";    Cmd = { node --version 2>&1 } },
+          @{ Name = "Chrome";  Cmd = { if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe") { "INSTALADO" } else { throw } } },
+          @{ Name = "7-Zip";   Cmd = { if (Test-Path "C:\Program Files\7-Zip\7z.exe") { "INSTALADO" } else { throw } } },
+          @{ Name = "VSCode";  Cmd = { if (Test-Path "$env:LOCALAPPDATA\Programs\Microsoft VS Code\Code.exe") { "INSTALADO" } else { throw } } },
+          @{ Name = "Tailscale"; Cmd = { & "C:\Program Files\Tailscale\tailscale.exe" version 2>&1 | Select-Object -First 1 } }
+        )
+        
+        foreach ($check in $checks) {
+          try {
+            $result = & $check.Cmd
+            Write-Host "   ✅ $($check.Name): $result" -ForegroundColor Green
+          } catch {
+            Write-Host "   ⚠️  $($check.Name): NÃO INSTALADO" -ForegroundColor Yellow
+          }
+        }
+        
+        # Limpar cache de apps
+        Remove-Item "$env:TEMP\apps" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "`n🧹 Cache limpo!" -ForegroundColor Cyan
+
+    # ==========================================================
+    #  AUTO SHUTDOWN
+    # ==========================================================
+    - name: Configure Auto Shutdown
+      if: ${{ github.event.inputs.auto_shutdown_minutes != '0' }}
+      timeout-minutes: 1
+      run: |
+        $minutes = [int]"${{ github.event.inputs.auto_shutdown_minutes }}"
+        Write-Host "⏰ Auto-desligamento em $minutes minutos" -ForegroundColor Yellow
+        Start-Process -FilePath "shutdown.exe" -ArgumentList "/s /t $($minutes * 60) /c `"PC @alves7.pcm sera desligado`"" -NoNewWindow
+        Write-Host "✅ Agendamento ativo!" -ForegroundColor Green
+
+    # ==========================================================
+    #  DETALHES DE CONEXÃO
+    # ==========================================================
+    - name: Connection Details
+      timeout-minutes: 1
+      run: |
+        Write-Host ""
+        Write-Host "  ╔══════════════════════════════════════════════════════╗" -ForegroundColor Magenta
+        Write-Host "  ║                                                      ║" -ForegroundColor Magenta
+        Write-Host "  ║      ⚡  PC CRIADO PELO @alves7.pcm [v4 ULTRA] ⚡    ║" -ForegroundColor Cyan
+        Write-Host "  ║                                                      ║" -ForegroundColor Magenta
+        Write-Host "  ╠══════════════════════════════════════════════════════╣" -ForegroundColor Magenta
+        Write-Host "  ║                                                      ║" -ForegroundColor Magenta
+        Write-Host "  ║  🌐 HOST (Tailscale IP):                             ║" -ForegroundColor Cyan
+        Write-Host "  ║     $env:TAILSCALE_IP" -ForegroundColor White
+        Write-Host "  ║                                                      ║" -ForegroundColor Magenta
+        Write-Host "  ║  👤 USUÁRIO: runneradmin                             ║" -ForegroundColor Cyan
+        Write-Host "  ║  🔑 SENHA:   Alves7@PC!                              ║" -ForegroundColor Cyan
+        Write-Host "  ║                                                      ║" -ForegroundColor Magenta
+        Write-Host "  ║  🎯 INSTÂNCIA: ${{ github.event.inputs.instance_number }}                                                  ║" -ForegroundColor Cyan
+        Write-Host "  ║  ⏱️  DURAÇÃO:  6 horas                                ║" -ForegroundColor Cyan
+        Write-Host "  ║                                                      ║" -ForegroundColor Magenta
+        Write-Host "  ╚══════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+        Write-Host ""
